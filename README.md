@@ -8,6 +8,10 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
+Pour les vidéos YouTube, installez également [FFmpeg](https://ffmpeg.org/download.html)
+et assurez-vous que la commande `ffmpeg` est disponible dans le `PATH`. Il est utilisé
+par `yt-dlp` lorsque YouTube fournit séparément les flux vidéo et audio.
+
 ## Utilisation
 
 ### Interface web
@@ -16,6 +20,15 @@ python -m venv .venv
 ```
 Ouvrir http://127.0.0.1:5000, glisser la vidéo sur la zone prévue, cliquer sur « Extraire le PGN »,
 puis « Copier » pour récupérer le PGN. La vidéo envoyée est supprimée après analyse.
+
+Il est également possible de coller une URL YouTube publique dans le champ prévu à cet effet,
+puis de cliquer sur « Extraire le PGN ». La vidéo est téléchargée dans un dossier temporaire,
+analysée de la même façon qu'un fichier local, puis supprimée automatiquement.
+
+Les playlists ne sont pas traitées : une seule vidéo est analysée. Les vidéos privées,
+bloquées par une restriction d'âge, nécessitant une authentification ou indisponibles
+ne peuvent pas être téléchargées. L'utilisation des vidéos doit respecter les conditions
+d'utilisation de YouTube et les droits applicables.
 
 ### Ligne de commande
 ```
