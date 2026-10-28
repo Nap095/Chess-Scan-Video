@@ -3,6 +3,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, render_template, request
 
@@ -40,6 +41,81 @@ def run_job(job_id, path, opts):
         path.unlink(missing_ok=True)
 
 
+def _is_youtube_url(value):
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+def _download_youtube(job_id, url, log, progress):
+    try:
+        import yt_dlp
+    except ImportError as e:
+        raise ScanError("La dépendance yt-dlp n'est pas installée.") from e
+
+    output = UPLOAD_DIR / f"{job_id}.%(ext)s"
+    log("Téléchargement de la vidéo YouTube…")
+    options = {
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "outtmpl": str(output),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [
+            lambda data: progress(float(data.get("downloaded_bytes", 0)) /
+                                  max(float(data.get("total_bytes") or data.get("total_bytes_estimate") or 1), 1))
+            if data.get("status") == "downloading" else None
+        ],
+    }
+    try:
+        with yt_dlp.YoutubeDL(options) as downloader:
+            downloader.download([url])
+    except yt_dlp.utils.DownloadError as e:
+        raise ScanError(f"Téléchargement YouTube impossible : {e}") from e
+
+    candidates = sorted(UPLOAD_DIR.glob(f"{job_id}.*"))
+    if not candidates:
+        raise ScanError("YouTube n'a fourni aucun fichier vidéo exploitable.")
+    return candidates[0]
+
+
+def run_youtube_job(job_id, url, opts):
+    path = None
+    try:
+        job = JOBS[job_id]
+        path = _download_youtube(
+            job_id,
+            url,
+            job["log"].append,
+            lambda p: job.__setitem__("progress", round(p * 0.25, 3)),
+        )
+        job["log"].append("Analyse de la vidéo téléchargée…")
+        job["pgn"] = scan_video(
+            path,
+            log=job["log"].append,
+            progress=lambda p: job.__setitem__("progress", round(0.25 + p * 0.75, 3)),
+            cancel=lambda: job["cancel"],
+            **opts,
+        )
+        job["status"] = "done"
+    except Cancelled:
+        JOBS[job_id]["status"] = "cancelled"
+    except ScanError as e:
+        JOBS[job_id]["status"], JOBS[job_id]["error"] = "error", str(e)
+    except Exception as e:
+        JOBS[job_id]["status"], JOBS[job_id]["error"] = "error", f"Erreur interne : {e}"
+    finally:
+        if path:
+            path.unlink(missing_ok=True)
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
@@ -64,6 +140,24 @@ def upload():
     with LOCK:
         JOBS[job_id] = {"status": "running", "progress": 0.0, "log": [], "pgn": "", "error": "", "cancel": False}
     threading.Thread(target=run_job, args=(job_id, path, opts), daemon=True).start()
+    return jsonify(job=job_id)
+
+
+@app.post("/youtube")
+def youtube():
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url", "")).strip()
+    if not _is_youtube_url(url):
+        return jsonify(error="URL YouTube invalide ou domaine non autorisé."), 400
+
+    opts = {
+        "white": str(data.get("white", "")).strip() or "?",
+        "black": str(data.get("black", "")).strip() or "?",
+    }
+    job_id = uuid.uuid4().hex
+    with LOCK:
+        JOBS[job_id] = {"status": "running", "progress": 0.0, "log": [], "pgn": "", "error": "", "cancel": False}
+    threading.Thread(target=run_youtube_job, args=(job_id, url, opts), daemon=True).start()
     return jsonify(job=job_id)
 
 

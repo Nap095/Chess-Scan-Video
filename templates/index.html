@@ -36,6 +36,11 @@
     <small id="fname">mp4, mkv, avi, mov, webm</small>
     <input id="file" type="file" accept="video/*,.mkv" hidden>
   </div>
+  <div class="url-source">
+    <label>ou URL YouTube
+      <input type="url" id="youtube" placeholder="https://www.youtube.com/watch?v=..." size="42">
+    </label>
+  </div>
 
   <div class="opts">
     <label>Blancs <input type="text" id="white" placeholder="?"></label>
@@ -69,12 +74,17 @@ window.addEventListener("drop", e => e.preventDefault());
 function setFile(f) {
   if (!f) return;
   file = f;
+  $("youtube").value = "";
   $("fname").textContent = `${f.name} (${(f.size / 1048576).toFixed(1)} Mo)`;
   $("go").disabled = false;
 }
 
+function hasSource() {
+  return Boolean(file || $("youtube").value.trim());
+}
+
 function busy(b) {
-  $("go").disabled = b || !file;
+  $("go").disabled = b || !hasSource();
   $("stop").hidden = !b;
   $("bar").hidden = !b;
   $("log").hidden = false;
@@ -85,13 +95,39 @@ function setStatus(msg, err) {
   $("status").className = err ? "err" : "";
 }
 
+$("youtube").oninput = () => {
+  if ($("youtube").value.trim()) {
+    file = null;
+    input.value = "";
+    $("fname").textContent = "Vidéo YouTube sélectionnée";
+  } else {
+    $("fname").textContent = "mp4, mkv, avi, mov, webm";
+  }
+  $("go").disabled = !hasSource();
+};
+
 $("go").onclick = () => {
+  const youtubeUrl = $("youtube").value.trim();
   const fd = new FormData();
-  fd.append("video", file);
   fd.append("white", $("white").value);
   fd.append("black", $("black").value);
   $("pgn").value = ""; $("log").textContent = ""; $("copy").disabled = true;
-  busy(true); setStatus("Envoi de la vidéo…"); $("bar").value = 0;
+  busy(true); setStatus(youtubeUrl ? "Téléchargement de la vidéo…" : "Envoi de la vidéo…"); $("bar").value = 0;
+
+  if (youtubeUrl) {
+    fetch("/youtube", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url: youtubeUrl, white: $("white").value, black: $("black").value})
+    }).then(async response => {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Échec du téléchargement.");
+      job = result.job; setStatus("Téléchargement terminé, analyse en cours…"); poll(0);
+    }).catch(error => { busy(false); setStatus(error.message, true); });
+    return;
+  }
+
+  fd.append("video", file);
 
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/upload");
